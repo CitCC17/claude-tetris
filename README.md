@@ -43,6 +43,29 @@ Es una versión jugable del Tetris clásico con todas las mecánicas que esperar
 - **Niveles** que aumentan cada 10 líneas y aceleran la caída.
 - **Pausa** y **Game Over** con opción de reinicio.
 
+### Mecánicas extra
+
+- **Hold**: guarda la pieza actual con `C` o `Shift` (una vez por pieza; el slot se atenúa mientras está bloqueado).
+- **Piezas no estándar**: pentominós `+`, `U` e `Y` y la 3×3 hueca aparecen ocasionalmente (12 %); tras un Tetris llega un **single 1×1** de recompensa.
+- **Combos y bonus**: limpiar líneas en piezas consecutivas multiplica la puntuación (x2, x3…); **T-spin** (400 / 800 / 1200 / 1600), **Back-to-Back** x1.5 para Tetris o T-spin seguidos y **Perfect Clear** (+3000 × nivel). Con textos flotantes, destellos y sonidos (`M` silencia).
+- **Power-ups**: cada 5 líneas la siguiente pieza trae uno (marcado con su letra y anunciado en NEXT):
+  - **B**omba: destruye un área 3×3.
+  - **R**ayo: limpia su fila y su columna.
+  - **T**inte: convierte los bloques de su color en comodines (+100 × nivel por comodín limpiado).
+  - **G**ravedad: compacta los huecos del tablero.
+  - **F**reeze (congelar): detiene la caída 5 s.
+- **Energía y habilidades**: la barra se llena limpiando líneas; llena, `E` abre un menú para elegir: ver las siguientes 5 piezas (30 s), intercambiar la pieza actual, ralentizar el tiempo (10 s), deshacer la última colocación o reservar la pieza aunque el hold esté bloqueado.
+- **Modo desafío**: al iniciar se elige modo:
+
+  | Modo             | Objetivo                                                   |
+  | ---------------- | ---------------------------------------------------------- |
+  | Clásico          | Sin objetivo                                               |
+  | Sprint 40        | Limpiar 40 líneas en 2 minutos                             |
+  | Basura           | Sobrevivir 2 minutos; cada 10 s sube una fila de basura    |
+  | Bloques fijos    | Eliminar todos los bloques pre-colocados                   |
+  | Invisible        | Limpiar 20 líneas; las piezas desaparecen al tocar suelo   |
+  | Rotación inversa | Limpiar 20 líneas; desde el nivel 5 la rotación se invierte |
+
 ---
 
 ## Cómo ejecutar el juego
@@ -85,6 +108,10 @@ Después abre `http://localhost:8000` en el navegador.
 | `↓`       | Soft drop (bajar más rápido)      |
 | `Espacio` | Hard drop (caída instantánea)     |
 | `P`       | Pausar / reanudar                 |
+| `C` o `Shift` | Hold (reservar / intercambiar pieza) |
+| `E`       | Abrir el menú de habilidades (energía llena); `1`–`5` elige, `Esc` cancela |
+| `M`       | Silenciar / activar sonido        |
+| `1`–`6`   | Elegir modo en el menú inicial    |
 
 ---
 
@@ -158,7 +185,7 @@ Cuando una pieza recién generada ya colisiona al aparecer (`spawn`), se dispara
 03-tetris/
 ├── index.html      # Estructura del DOM y canvas
 ├── style.css       # Estilos del juego (dark theme)
-├── game.js         # Toda la lógica del Tetris (~300 líneas)
+├── game.js         # Toda la lógica del Tetris (~1000 líneas)
 └── README.md
 ```
 
