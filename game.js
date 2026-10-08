@@ -18,7 +18,10 @@ const COLORS = [
   '#4db6ac', // U - pentominó (verde azulado)
   '#aed581', // Y - pentominó (lima)
   '#fafafa', // single 1×1 (blanco)
+  '#ffffff', // comodín (se dibuja con arcoíris animado)
 ];
+
+const WILD = 13;
 
 const PIECES = [
   null,
@@ -46,6 +49,20 @@ const LINE_SCORES = [0, 100, 300, 500, 800];
 const TSPIN_SCORES = [400, 800, 1200, 1600];  // T-spin con 0, 1, 2, 3 líneas
 const B2B_MULTIPLIER = 1.5;                   // Tetris/T-spin consecutivos
 const PERFECT_CLEAR_BONUS = 3000;             // × nivel, tablero vacío
+const WILD_BONUS = 100;                       // × nivel, por comodín limpiado
+
+// Power-ups: cada POWER_EVERY_LINES líneas la siguiente pieza trae uno.
+// El efecto se activa al fijarla, centrado en la pieza.
+const POWER_EVERY_LINES = 5;
+const FREEZE_MS = 5000;
+const POWERS = {
+  bomb:    { name: 'BOMBA',    icon: 'B', color: '#ff5252' },  // destruye 3×3
+  ray:     { name: 'RAYO',     icon: 'R', color: '#ffee58' },  // limpia fila + columna
+  tint:    { name: 'TINTE',    icon: 'T', color: '#e040fb' },  // su color → comodines
+  gravity: { name: 'GRAVEDAD', icon: 'G', color: '#69f0ae' },  // compacta huecos
+  freeze:  { name: 'CONGELAR', icon: 'F', color: '#80d8ff' },  // sin caída 5 s
+};
+const POWER_KEYS = Object.keys(POWERS);
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
@@ -58,6 +75,7 @@ const linesEl = document.getElementById('lines');
 const levelEl = document.getElementById('level');
 const comboEl = document.getElementById('combo');
 const b2bEl = document.getElementById('b2b');
+const nextPowerEl = document.getElementById('next-power');
 const overlay = document.getElementById('overlay');
 const overlayTitle = document.getElementById('overlay-title');
 const overlayScore = document.getElementById('overlay-score');
@@ -67,14 +85,15 @@ let board, current, next, score, lines, level, lastTime, dropAccum, dropInterval
 let state; // 'playing' | 'paused' | 'over'
 let hold, canHold;
 let combo, backToBack, lastMoveRotate;
+let nextPowerAt, freezeTimer;
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
 }
 
-function makePiece(type) {
+function makePiece(type, power = null) {
   const shape = PIECES[type].map(row => [...row]);
-  return { type, shape, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
+  return { type, shape, power, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
 }
 
 function randomPiece() {
@@ -152,16 +171,66 @@ function merge() {
 }
 
 function clearLines() {
-  let cleared = 0;
+  let cleared = 0, wilds = 0;
   for (let r = ROWS - 1; r >= 0; r--) {
     if (board[r].every(v => v !== 0)) {
+      wilds += board[r].filter(v => v === WILD).length;
       board.splice(r, 1);
       board.unshift(new Array(COLS).fill(0));
       cleared++;
       r++;
     }
   }
-  return cleared;
+  return { cleared, wilds };
+}
+
+function pieceCenter(piece) {
+  let sx = 0, sy = 0, n = 0;
+  piece.shape.forEach((row, r) => row.forEach((v, c) => {
+    if (v) { sx += piece.x + c; sy += piece.y + r; n++; }
+  }));
+  return { cx: Math.round(sx / n), cy: Math.round(sy / n) };
+}
+
+// Aplica el power-up de la pieza recién fijada (ya está en el tablero)
+function applyPower(piece) {
+  const { cx, cy } = pieceCenter(piece);
+  const p = POWERS[piece.power];
+  switch (piece.power) {
+    case 'bomb':
+      for (let y = cy - 1; y <= cy + 1; y++)
+        for (let x = cx - 1; x <= cx + 1; x++)
+          if (y >= 0 && y < ROWS && x >= 0 && x < COLS) board[y][x] = 0;
+      flash('rgba(255,82,82,', 0.5);
+      shake();
+      break;
+    case 'ray':
+      for (let y = 0; y < ROWS; y++) board[y][cx] = 0;
+      board.splice(cy, 1);
+      board.unshift(new Array(COLS).fill(0));
+      flash('rgba(255,238,88,', 0.5);
+      break;
+    case 'tint':
+      for (const row of board)
+        for (let x = 0; x < COLS; x++)
+          if (row[x] === piece.type) row[x] = WILD;
+      flash('rgba(224,64,251,', 0.35);
+      break;
+    case 'gravity':
+      for (let x = 0; x < COLS; x++) {
+        const cells = board.map(row => row[x]).filter(v => v);
+        for (let y = 0; y < ROWS; y++)
+          board[y][x] = y < ROWS - cells.length ? 0 : cells[y - (ROWS - cells.length)];
+      }
+      flash('rgba(105,240,174,', 0.35);
+      break;
+    case 'freeze':
+      freezeTimer = FREEZE_MS;
+      flash('rgba(128,216,255,', 0.4);
+      break;
+  }
+  popup(p.name, p.color, 28);
+  sfx.power();
 }
 
 function addLines(cleared) {
@@ -249,8 +318,13 @@ function softDrop() {
 function lockPiece() {
   const tspin = isTSpin();
   merge();
-  const cleared = clearLines();
+  if (current.power) applyPower(current);
+  const { cleared, wilds } = clearLines();
   scoreLock(cleared, tspin);
+  if (wilds) {
+    score += wilds * WILD_BONUS * level;
+    popup(`COMODÍN +${(wilds * WILD_BONUS * level).toLocaleString()}`, '#e040fb');
+  }
   addLines(cleared);
   // Recompensa: tras un Tetris la siguiente pieza es un single 1×1
   if (cleared >= 4) {
@@ -259,6 +333,12 @@ function lockPiece() {
   }
   updateHUD();
   spawn();
+  // El power-up va en la pieza siguiente, para que se vea antes en NEXT
+  if (lines >= nextPowerAt) {
+    while (lines >= nextPowerAt) nextPowerAt += POWER_EVERY_LINES;
+    next.power = POWER_KEYS[Math.floor(Math.random() * POWER_KEYS.length)];
+    drawNext();
+  }
 }
 
 function spawn() {
@@ -276,8 +356,8 @@ function spawn() {
 function holdPiece() {
   if (!canHold) return;
   const prev = current;
-  current = hold ? makePiece(hold.type) : takeNext();
-  hold = makePiece(prev.type);
+  current = hold ? makePiece(hold.type, hold.power) : takeNext();
+  hold = makePiece(prev.type, prev.power);
   canHold = false;
   drawHold();
   if (collide(current.shape, current.x, current.y)) endGame();
@@ -379,7 +459,9 @@ const sfx = (() => {
 
 function drawBlock(context, x, y, colorIndex, size, alpha) {
   if (!colorIndex) return;
-  const color = COLORS[colorIndex];
+  const color = colorIndex === WILD
+    ? `hsl(${(performance.now() / 8 + (x + y) * 30) % 360}, 85%, 65%)`
+    : COLORS[colorIndex];
   context.globalAlpha = alpha ?? 1;
   context.fillStyle = color;
   context.fillRect(x * size + 1, y * size + 1, size - 2, size - 2);
@@ -387,6 +469,23 @@ function drawBlock(context, x, y, colorIndex, size, alpha) {
   context.fillStyle = 'rgba(255,255,255,0.12)';
   context.fillRect(x * size + 1, y * size + 1, size - 2, 4);
   context.globalAlpha = 1;
+}
+
+// Marca de power-up: borde pulsante del color del poder + letra
+function drawPowerMark(context, x, y, size, power) {
+  const p = POWERS[power];
+  context.save();
+  context.globalAlpha = 0.6 + 0.4 * Math.sin(performance.now() / 120);
+  context.strokeStyle = p.color;
+  context.lineWidth = 2;
+  context.strokeRect(x * size + 2, y * size + 2, size - 4, size - 4);
+  context.globalAlpha = 1;
+  context.fillStyle = '#0f0f17';
+  context.font = `900 ${Math.round(size * 0.55)}px 'Courier New', monospace`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(p.icon, x * size + size / 2, y * size + size / 2 + 1);
+  context.restore();
 }
 
 function drawGrid() {
@@ -424,8 +523,23 @@ function draw() {
 
   // current piece
   for (let r = 0; r < current.shape.length; r++)
-    for (let c = 0; c < current.shape[r].length; c++)
+    for (let c = 0; c < current.shape[r].length; c++) {
+      if (!current.shape[r][c]) continue;
       drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
+      if (current.power) drawPowerMark(ctx, current.x + c, current.y + r, BLOCK, current.power);
+    }
+
+  // congelado: tinte azul + cuenta regresiva
+  if (freezeTimer > 0) {
+    ctx.fillStyle = 'rgba(128,216,255,0.08)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.fillStyle = POWERS.freeze.color;
+    ctx.font = "700 14px 'Courier New', monospace";
+    ctx.textAlign = 'center';
+    ctx.fillText(`CONGELADO ${(freezeTimer / 1000).toFixed(1)}s`, canvas.width / 2, 18);
+    ctx.restore();
+  }
 
   drawEffects();
 }
@@ -442,13 +556,21 @@ function drawPiecePreview(context, piece, size, boxY, boxH) {
   const h = (maxR - minR + 1) * size;
   context.save();
   context.translate((context.canvas.width - w) / 2 - minC * size, boxY + (boxH - h) / 2 - minR * size);
-  for (const [r, c] of cells) drawBlock(context, c, r, piece.shape[r][c], size);
+  for (const [r, c] of cells) {
+    drawBlock(context, c, r, piece.shape[r][c], size);
+    if (piece.power) drawPowerMark(context, c, r, size, piece.power);
+  }
   context.restore();
 }
 
 function drawNext() {
   nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
   drawPiecePreview(nextCtx, next, 30, 0, nextCanvas.height);
+  nextPowerEl.classList.toggle('hidden', !next.power);
+  if (next.power) {
+    nextPowerEl.textContent = POWERS[next.power].name;
+    nextPowerEl.style.background = POWERS[next.power].color;
+  }
 }
 
 function drawHold() {
@@ -478,10 +600,14 @@ function togglePause() {
 }
 
 function update(dt) {
-  dropAccum += dt;
-  if (dropAccum >= dropInterval) {
-    dropAccum = 0;
-    if (!tryMove(0, 1)) lockPiece();
+  if (freezeTimer > 0) {
+    freezeTimer = Math.max(0, freezeTimer - dt);   // congelado: no hay caída
+  } else {
+    dropAccum += dt;
+    if (dropAccum >= dropInterval) {
+      dropAccum = 0;
+      if (!tryMove(0, 1)) lockPiece();
+    }
   }
   updateEffects(dt);
 }
@@ -508,6 +634,8 @@ function init() {
   hold = null;
   combo = 0;
   backToBack = false;
+  nextPowerAt = POWER_EVERY_LINES;
+  freezeTimer = 0;
   popups = [];
   flashAlpha = 0;
   next = randomPiece();
