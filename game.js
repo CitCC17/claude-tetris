@@ -43,6 +43,9 @@ const PIECE_T      = 3;
 const PIECE_SINGLE = 12;                 // recompensa tras un Tetris
 
 const LINE_SCORES = [0, 100, 300, 500, 800];
+const TSPIN_SCORES = [400, 800, 1200, 1600];  // T-spin con 0, 1, 2, 3 líneas
+const B2B_MULTIPLIER = 1.5;                   // Tetris/T-spin consecutivos
+const PERFECT_CLEAR_BONUS = 3000;             // × nivel, tablero vacío
 
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
@@ -53,6 +56,8 @@ const holdCtx = holdCanvas.getContext('2d');
 const scoreEl = document.getElementById('score');
 const linesEl = document.getElementById('lines');
 const levelEl = document.getElementById('level');
+const comboEl = document.getElementById('combo');
+const b2bEl = document.getElementById('b2b');
 const overlay = document.getElementById('overlay');
 const overlayTitle = document.getElementById('overlay-title');
 const overlayScore = document.getElementById('overlay-score');
@@ -61,6 +66,7 @@ const restartBtn = document.getElementById('restart-btn');
 let board, current, next, score, lines, level, lastTime, dropAccum, dropInterval, animId;
 let state; // 'playing' | 'paused' | 'over'
 let hold, canHold;
+let combo, backToBack, lastMoveRotate;
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
@@ -112,9 +118,30 @@ function tryRotate() {
     if (!collide(rotated, current.x + kick, current.y)) {
       current.shape = rotated;
       current.x += kick;
+      lastMoveRotate = true;
       return;
     }
   }
+}
+
+function tryMove(dx, dy) {
+  if (collide(current.shape, current.x + dx, current.y + dy)) return false;
+  current.x += dx;
+  current.y += dy;
+  lastMoveRotate = false;
+  return true;
+}
+
+// T-spin: la T se fijó justo después de rotar y al menos 3 de las 4 esquinas
+// de su caja 3×3 están ocupadas (o fuera del tablero).
+function isTSpin() {
+  if (current.type !== PIECE_T || !lastMoveRotate) return false;
+  let filled = 0;
+  for (const [dx, dy] of [[0, 0], [2, 0], [0, 2], [2, 2]]) {
+    const x = current.x + dx, y = current.y + dy;
+    if (x < 0 || x >= COLS || y >= ROWS || (y >= 0 && board[y][x])) filled++;
+  }
+  return filled >= 3;
 }
 
 function merge() {
@@ -134,17 +161,65 @@ function clearLines() {
       r++;
     }
   }
-  if (cleared) {
-    lines += cleared;
-    score += (LINE_SCORES[cleared] || 0) * level;
-    level = Math.floor(lines / 10) + 1;
-    dropInterval = Math.max(100, 1000 - (level - 1) * 90);
-    updateHUD();
+  return cleared;
+}
+
+function addLines(cleared) {
+  if (!cleared) return;
+  lines += cleared;
+  level = Math.floor(lines / 10) + 1;
+  dropInterval = Math.max(100, 1000 - (level - 1) * 90);
+}
+
+function lineScore(cleared) {
+  return cleared <= 4 ? LINE_SCORES[cleared] : LINE_SCORES[4] + (cleared - 4) * 400;
+}
+
+// Puntuación de una pieza fijada: combo encadenado, T-spin, B2B y Perfect Clear
+function scoreLock(cleared, tspin) {
+  if (!cleared) {
+    combo = 0;
+    if (tspin) {
+      score += TSPIN_SCORES[0] * level;
+      popup('T-SPIN', COLORS[PIECE_T]);
+      sfx.tspin();
+    }
+    return;
   }
-  // Recompensa: tras un Tetris la siguiente pieza es un single 1×1
-  if (cleared >= 4) {
-    next = makePiece(PIECE_SINGLE);
-    drawNext();
+
+  combo++;
+  const difficult = cleared >= 4 || tspin;
+  const isB2B = difficult && backToBack;
+  backToBack = difficult;
+
+  let points = (tspin ? TSPIN_SCORES[Math.min(cleared, 3)] : lineScore(cleared)) * level;
+  points *= combo;                                  // x1, x2, x3...
+  if (isB2B) points = Math.round(points * B2B_MULTIPLIER);
+  score += points;
+
+  if (tspin) {
+    popup(`T-SPIN ${['', 'SINGLE', 'DOUBLE', 'TRIPLE'][Math.min(cleared, 3)]}`, COLORS[PIECE_T]);
+    sfx.tspin();
+  } else if (cleared >= 4) {
+    popup('TETRIS!', COLORS[1], 34);
+    sfx.tetris();
+    shake();
+  }
+  if (combo >= 2) popup(`COMBO x${combo}`, '#ffd54f');
+  if (isB2B) {
+    popup('BACK-TO-BACK', '#ff8a65');
+    sfx.b2b();
+  }
+  popup(`+${points.toLocaleString()}`, '#7aa2f7', 18);
+  sfx.clear(combo);
+  flash('rgba(255,255,255,', 0.25 + Math.min(combo, 5) * 0.05);
+
+  if (board.every(row => row.every(v => !v))) {
+    score += PERFECT_CLEAR_BONUS * level;
+    popup('PERFECT CLEAR!', '#80deea', 30);
+    sfx.perfect();
+    flash('rgba(128,222,234,', 0.6);
+    shake();
   }
 }
 
@@ -156,14 +231,14 @@ function ghostY() {
 
 function hardDrop() {
   const gy = ghostY();
+  if (gy > current.y) lastMoveRotate = false;
   score += (gy - current.y) * 2;
   current.y = gy;
   lockPiece();
 }
 
 function softDrop() {
-  if (!collide(current.shape, current.x, current.y + 1)) {
-    current.y++;
+  if (tryMove(0, 1)) {
     score += 1;
     updateHUD();
   } else {
@@ -172,14 +247,24 @@ function softDrop() {
 }
 
 function lockPiece() {
+  const tspin = isTSpin();
   merge();
-  clearLines();
+  const cleared = clearLines();
+  scoreLock(cleared, tspin);
+  addLines(cleared);
+  // Recompensa: tras un Tetris la siguiente pieza es un single 1×1
+  if (cleared >= 4) {
+    next = makePiece(PIECE_SINGLE);
+    drawNext();
+  }
+  updateHUD();
   spawn();
 }
 
 function spawn() {
   current = takeNext();
   canHold = true;
+  lastMoveRotate = false;
   drawHold();
   if (collide(current.shape, current.x, current.y)) {
     endGame();
@@ -202,7 +287,95 @@ function updateHUD() {
   scoreEl.textContent = score.toLocaleString();
   linesEl.textContent = lines;
   levelEl.textContent = level;
+  comboEl.textContent = combo >= 2 ? `x${combo}` : '—';
+  b2bEl.classList.toggle('hidden', !backToBack);
 }
+
+// ── Efectos visuales y sonoros ───────────────────────────────────────────────
+let popups = [];           // textos flotantes sobre el tablero
+let flashColor = '', flashAlpha = 0;
+
+function popup(text, color, size = 22) {
+  popups.push({ text, color, size, age: 0, life: 1300 });
+}
+
+function flash(rgbaPrefix, alpha) {
+  flashColor = rgbaPrefix;
+  flashAlpha = Math.max(flashAlpha, alpha);
+}
+
+function shake() {
+  canvas.classList.remove('shake');
+  void canvas.offsetWidth;   // reinicia la animación CSS
+  canvas.classList.add('shake');
+}
+
+function updateEffects(dt) {
+  popups.forEach(p => { p.age += dt; });
+  popups = popups.filter(p => p.age < p.life);
+  flashAlpha = Math.max(0, flashAlpha - dt / 400);
+}
+
+function drawEffects() {
+  if (flashAlpha > 0) {
+    ctx.fillStyle = `${flashColor}${flashAlpha})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  popups.forEach((p, i) => {
+    const t = p.age / p.life;
+    ctx.globalAlpha = 1 - t * t;
+    ctx.font = `900 ${p.size}px 'Courier New', monospace`;
+    ctx.fillStyle = p.color;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 12;
+    ctx.fillText(p.text, canvas.width / 2, canvas.height * 0.35 + i * 34 - t * 40);
+  });
+  ctx.restore();
+}
+
+// Sonidos sintetizados con Web Audio (sin archivos). M silencia.
+const sfx = (() => {
+  let ac = null;
+  let muted = false;
+
+  function tone(freq, dur = 0.12, type = 'square', delay = 0, vol = 0.07) {
+    if (muted || !ac) return;
+    const t = ac.currentTime + delay;
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(gain).connect(ac.destination);
+    osc.start(t);
+    osc.stop(t + dur);
+  }
+  const arpeggio = (notes, step = 0.07, type = 'square') =>
+    notes.forEach((f, i) => tone(f, 0.15, type, i * step));
+
+  return {
+    // El navegador solo permite audio tras una interacción del usuario
+    unlock() {
+      try {
+        ac ??= new (window.AudioContext || window.webkitAudioContext)();
+        if (ac.state === 'suspended') ac.resume();
+      } catch { /* sin audio */ }
+    },
+    toggleMute() { muted = !muted; return muted; },
+    // Cada eslabón del combo sube dos semitonos
+    clear: c => tone(330 * Math.pow(2, (Math.min(c, 12) - 1) * 2 / 12), 0.14, 'triangle'),
+    tetris: () => arpeggio([523, 659, 784, 1047]),
+    tspin: () => arpeggio([392, 587], 0.09, 'sawtooth'),
+    b2b: () => arpeggio([880, 1175], 0.06),
+    perfect: () => arpeggio([523, 659, 784, 1047, 1319, 1568], 0.08, 'triangle'),
+    power: () => arpeggio([220, 330, 440], 0.05, 'sawtooth'),
+    gameOver: () => arpeggio([392, 330, 262, 196], 0.15, 'triangle'),
+  };
+})();
 
 function drawBlock(context, x, y, colorIndex, size, alpha) {
   if (!colorIndex) return;
@@ -253,6 +426,8 @@ function draw() {
   for (let r = 0; r < current.shape.length; r++)
     for (let c = 0; c < current.shape[r].length; c++)
       drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
+
+  drawEffects();
 }
 
 // Dibuja una pieza centrada (por sus celdas ocupadas) en una franja del canvas.
@@ -287,6 +462,7 @@ function endGame() {
   overlayTitle.textContent = 'GAME OVER';
   overlayScore.textContent = `Puntuación: ${score.toLocaleString()}`;
   overlay.classList.remove('hidden');
+  sfx.gameOver();
 }
 
 function togglePause() {
@@ -305,12 +481,9 @@ function update(dt) {
   dropAccum += dt;
   if (dropAccum >= dropInterval) {
     dropAccum = 0;
-    if (!collide(current.shape, current.x, current.y + 1)) {
-      current.y++;
-    } else {
-      lockPiece();
-    }
+    if (!tryMove(0, 1)) lockPiece();
   }
+  updateEffects(dt);
 }
 
 // El loop sigue corriendo en pausa/menús (solo se congela la lógica) y se
@@ -333,6 +506,10 @@ function init() {
   dropAccum = 0;
   lastTime = performance.now();
   hold = null;
+  combo = 0;
+  backToBack = false;
+  popups = [];
+  flashAlpha = 0;
   next = randomPiece();
   spawn();
   updateHUD();
@@ -342,14 +519,16 @@ function init() {
 }
 
 document.addEventListener('keydown', e => {
+  sfx.unlock();
   if (e.code === 'KeyP') { togglePause(); return; }
+  if (e.code === 'KeyM') { sfx.toggleMute(); return; }
   if (state !== 'playing') return;
   switch (e.code) {
     case 'ArrowLeft':
-      if (!collide(current.shape, current.x - 1, current.y)) current.x--;
+      tryMove(-1, 0);
       break;
     case 'ArrowRight':
-      if (!collide(current.shape, current.x + 1, current.y)) current.x++;
+      tryMove(1, 0);
       break;
     case 'ArrowDown':
       softDrop();
