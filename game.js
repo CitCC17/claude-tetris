@@ -14,6 +14,10 @@ const COLORS = [
   '#90caf9', // J - pale blue
   '#ffb74d', // L - orange
   '#9e9e9e', // N - tuerca (gris metálico)
+  '#f06292', // + - pentominó (rosa)
+  '#4db6ac', // U - pentominó (verde azulado)
+  '#aed581', // Y - pentominó (lima)
+  '#fafafa', // single 1×1 (blanco)
 ];
 
 const PIECES = [
@@ -25,8 +29,18 @@ const PIECES = [
   [[5,5,0],[0,5,5],[0,0,0]],                  // Z
   [[6,0,0],[6,6,6],[0,0,0]],                  // J
   [[0,0,7],[7,7,7],[0,0,0]],                  // L
-  [[8,8,8],[8,0,8],[8,8,8]],                  // N (tuerca)
+  [[8,8,8],[8,0,8],[8,8,8]],                  // N (tuerca, 3×3 hueca)
+  [[0,9,0],[9,9,9],[0,9,0]],                  // +
+  [[10,0,10],[10,10,10],[0,0,0]],             // U
+  [[0,0,0,0],[11,11,11,11],[0,11,0,0],[0,0,0,0]], // Y
+  [[12]],                                     // single
 ];
+
+const STANDARD_PIECES = [1, 2, 3, 4, 5, 6, 7];
+const SPECIAL_PIECES  = [8, 9, 10, 11];  // 3×3 hueca (reto) + pentominós
+const SPECIAL_CHANCE  = 0.12;            // probabilidad de pieza especial
+const PIECE_T      = 3;
+const PIECE_SINGLE = 12;                 // recompensa tras un Tetris
 
 const LINE_SCORES = [0, 100, 300, 500, 800];
 
@@ -58,7 +72,8 @@ function makePiece(type) {
 }
 
 function randomPiece() {
-  return makePiece(Math.floor(Math.random() * 8) + 1);
+  const pool = Math.random() < SPECIAL_CHANCE ? SPECIAL_PIECES : STANDARD_PIECES;
+  return makePiece(pool[Math.floor(Math.random() * pool.length)]);
 }
 
 function takeNext() {
@@ -125,6 +140,11 @@ function clearLines() {
     level = Math.floor(lines / 10) + 1;
     dropInterval = Math.max(100, 1000 - (level - 1) * 90);
     updateHUD();
+  }
+  // Recompensa: tras un Tetris la siguiente pieza es un single 1×1
+  if (cleared >= 4) {
+    next = makePiece(PIECE_SINGLE);
+    drawNext();
   }
 }
 
