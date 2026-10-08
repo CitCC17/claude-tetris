@@ -34,6 +34,8 @@ const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const nextCanvas = document.getElementById('next-canvas');
 const nextCtx = nextCanvas.getContext('2d');
+const holdCanvas = document.getElementById('hold-canvas');
+const holdCtx = holdCanvas.getContext('2d');
 const scoreEl = document.getElementById('score');
 const linesEl = document.getElementById('lines');
 const levelEl = document.getElementById('level');
@@ -44,15 +46,26 @@ const restartBtn = document.getElementById('restart-btn');
 
 let board, current, next, score, lines, level, lastTime, dropAccum, dropInterval, animId;
 let state; // 'playing' | 'paused' | 'over'
+let hold, canHold;
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
 }
 
-function randomPiece() {
-  const type = Math.floor(Math.random() * 8) + 1;
+function makePiece(type) {
   const shape = PIECES[type].map(row => [...row]);
   return { type, shape, x: Math.floor(COLS / 2) - Math.floor(shape[0].length / 2), y: 0 };
+}
+
+function randomPiece() {
+  return makePiece(Math.floor(Math.random() * 8) + 1);
+}
+
+function takeNext() {
+  const piece = next;
+  next = randomPiece();
+  drawNext();
+  return piece;
 }
 
 function collide(shape, ox, oy) {
@@ -145,12 +158,24 @@ function lockPiece() {
 }
 
 function spawn() {
-  current = next;
-  next = randomPiece();
+  current = takeNext();
+  canHold = true;
+  drawHold();
   if (collide(current.shape, current.x, current.y)) {
     endGame();
   }
-  drawNext();
+}
+
+// Hold: guarda la pieza actual (en su orientación inicial) y saca la reservada,
+// o la siguiente si el slot está vacío. Solo una vez por pieza.
+function holdPiece() {
+  if (!canHold) return;
+  const prev = current;
+  current = hold ? makePiece(hold.type) : takeNext();
+  hold = makePiece(prev.type);
+  canHold = false;
+  drawHold();
+  if (collide(current.shape, current.x, current.y)) endGame();
 }
 
 function updateHUD() {
@@ -210,15 +235,31 @@ function draw() {
       drawBlock(ctx, current.x + c, current.y + r, current.shape[r][c], BLOCK);
 }
 
+// Dibuja una pieza centrada (por sus celdas ocupadas) en una franja del canvas.
+function drawPiecePreview(context, piece, size, boxY, boxH) {
+  const cells = [];
+  piece.shape.forEach((row, r) => row.forEach((v, c) => { if (v) cells.push([r, c]); }));
+  const minR = Math.min(...cells.map(([r]) => r));
+  const maxR = Math.max(...cells.map(([r]) => r));
+  const minC = Math.min(...cells.map(([, c]) => c));
+  const maxC = Math.max(...cells.map(([, c]) => c));
+  const w = (maxC - minC + 1) * size;
+  const h = (maxR - minR + 1) * size;
+  context.save();
+  context.translate((context.canvas.width - w) / 2 - minC * size, boxY + (boxH - h) / 2 - minR * size);
+  for (const [r, c] of cells) drawBlock(context, c, r, piece.shape[r][c], size);
+  context.restore();
+}
+
 function drawNext() {
-  const NB = 30;
   nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
-  const shape = next.shape;
-  const offX = Math.floor((4 - shape[0].length) / 2);
-  const offY = Math.floor((4 - shape.length) / 2);
-  for (let r = 0; r < shape.length; r++)
-    for (let c = 0; c < shape[r].length; c++)
-      drawBlock(nextCtx, offX + c, offY + r, shape[r][c], NB);
+  drawPiecePreview(nextCtx, next, 30, 0, nextCanvas.height);
+}
+
+function drawHold() {
+  holdCtx.clearRect(0, 0, holdCanvas.width, holdCanvas.height);
+  if (hold) drawPiecePreview(holdCtx, hold, 30, 0, holdCanvas.height);
+  holdCanvas.classList.toggle('locked', !canHold);
 }
 
 function endGame() {
@@ -271,6 +312,7 @@ function init() {
   dropInterval = 1000;
   dropAccum = 0;
   lastTime = performance.now();
+  hold = null;
   next = randomPiece();
   spawn();
   updateHUD();
@@ -299,6 +341,11 @@ document.addEventListener('keydown', e => {
     case 'Space':
       e.preventDefault();
       hardDrop();
+      break;
+    case 'KeyC':
+    case 'ShiftLeft':
+    case 'ShiftRight':
+      holdPiece();
       break;
   }
   updateHUD();
