@@ -64,6 +64,16 @@ const POWERS = {
 };
 const POWER_KEYS = Object.keys(POWERS);
 
+// Energía: se llena limpiando líneas; llena (100) permite usar una habilidad con E
+const ENERGY_MAX = 100;
+const ENERGY_PER_LINE = 10;
+const ENERGY_BONUS = 10;          // extra por Tetris o T-spin con líneas
+const QUEUE_SIZE = 5;
+const PREVIEW_MS = 30000;         // duración de "ver siguientes 5"
+const SLOW_MS = 10000;
+const SLOW_FACTOR = 2.5;
+const ABILITIES = ['preview', 'swap', 'slow', 'undo', 'hold'];
+
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const nextCanvas = document.getElementById('next-canvas');
@@ -76,16 +86,21 @@ const levelEl = document.getElementById('level');
 const comboEl = document.getElementById('combo');
 const b2bEl = document.getElementById('b2b');
 const nextPowerEl = document.getElementById('next-power');
+const energyFill = document.getElementById('energy-fill');
+const energyHint = document.getElementById('energy-hint');
+const abilityMenu = document.getElementById('ability-menu');
+const abilityButtons = abilityMenu.querySelectorAll('[data-ability]');
 const overlay = document.getElementById('overlay');
 const overlayTitle = document.getElementById('overlay-title');
 const overlayScore = document.getElementById('overlay-score');
 const restartBtn = document.getElementById('restart-btn');
 
-let board, current, next, score, lines, level, lastTime, dropAccum, dropInterval, animId;
+let board, current, queue, score, lines, level, lastTime, dropAccum, dropInterval, animId;
 let state; // 'playing' | 'paused' | 'over'
 let hold, canHold;
 let combo, backToBack, lastMoveRotate;
 let nextPowerAt, freezeTimer;
+let energy, previewTimer, slowTimer, spawnSnapshot, undoSnapshot;
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
@@ -102,11 +117,13 @@ function randomPiece() {
 }
 
 function takeNext() {
-  const piece = next;
-  next = randomPiece();
+  const piece = queue.shift();
+  queue.push(randomPiece());
   drawNext();
   return piece;
 }
+
+const clonePiece = p => p && makePiece(p.type, p.power);
 
 function collide(shape, ox, oy) {
   for (let r = 0; r < shape.length; r++) {
@@ -316,6 +333,7 @@ function softDrop() {
 }
 
 function lockPiece() {
+  undoSnapshot = spawnSnapshot;
   const tspin = isTSpin();
   merge();
   if (current.power) applyPower(current);
@@ -326,9 +344,10 @@ function lockPiece() {
     popup(`COMODÍN +${(wilds * WILD_BONUS * level).toLocaleString()}`, '#e040fb');
   }
   addLines(cleared);
+  addEnergy(cleared * ENERGY_PER_LINE + (cleared >= 4 || (tspin && cleared) ? ENERGY_BONUS : 0));
   // Recompensa: tras un Tetris la siguiente pieza es un single 1×1
   if (cleared >= 4) {
-    next = makePiece(PIECE_SINGLE);
+    queue[0] = makePiece(PIECE_SINGLE);
     drawNext();
   }
   updateHUD();
@@ -336,7 +355,7 @@ function lockPiece() {
   // El power-up va en la pieza siguiente, para que se vea antes en NEXT
   if (lines >= nextPowerAt) {
     while (lines >= nextPowerAt) nextPowerAt += POWER_EVERY_LINES;
-    next.power = POWER_KEYS[Math.floor(Math.random() * POWER_KEYS.length)];
+    queue[0].power = POWER_KEYS[Math.floor(Math.random() * POWER_KEYS.length)];
     drawNext();
   }
 }
@@ -345,6 +364,7 @@ function spawn() {
   current = takeNext();
   canHold = true;
   lastMoveRotate = false;
+  spawnSnapshot = takeSnapshot();
   drawHold();
   if (collide(current.shape, current.x, current.y)) {
     endGame();
@@ -352,9 +372,10 @@ function spawn() {
 }
 
 // Hold: guarda la pieza actual (en su orientación inicial) y saca la reservada,
-// o la siguiente si el slot está vacío. Solo una vez por pieza.
-function holdPiece() {
-  if (!canHold) return;
+// o la siguiente si el slot está vacío. Solo una vez por pieza, salvo que se
+// fuerce con la habilidad de reserva.
+function holdPiece(force = false) {
+  if (!canHold && !force) return;
   const prev = current;
   current = hold ? makePiece(hold.type, hold.power) : takeNext();
   hold = makePiece(prev.type, prev.power);
@@ -363,12 +384,98 @@ function holdPiece() {
   if (collide(current.shape, current.x, current.y)) endGame();
 }
 
+// ── Energía y habilidades ────────────────────────────────────────────────────
+function addEnergy(amount) {
+  if (!amount || energy >= ENERGY_MAX) return;
+  energy = Math.min(ENERGY_MAX, energy + amount);
+  if (energy === ENERGY_MAX) popup('ENERGÍA LISTA [E]', '#b388ff', 18);
+}
+
+// Copia del estado al aparecer cada pieza; al fijarla pasa a ser el punto
+// de "deshacer" (así también se revierten los puntos de soft/hard drop).
+function takeSnapshot() {
+  return {
+    board: board.map(row => [...row]),
+    piece: clonePiece(current),
+    queue: queue.map(clonePiece),
+    hold: clonePiece(hold),
+    score, lines, level, combo, backToBack, nextPowerAt, dropInterval,
+  };
+}
+
+function abilityAvailable(name) {
+  return name !== 'undo' || !!undoSnapshot;
+}
+
+function openAbilityMenu() {
+  if (energy < ENERGY_MAX) return;
+  state = 'ability';
+  abilityButtons.forEach(btn => { btn.disabled = !abilityAvailable(btn.dataset.ability); });
+  abilityMenu.classList.remove('hidden');
+}
+
+function closeAbilityMenu() {
+  state = 'playing';
+  abilityMenu.classList.add('hidden');
+}
+
+function useAbility(name) {
+  if (state !== 'ability' || !abilityAvailable(name)) return;
+  closeAbilityMenu();
+  switch (name) {
+    case 'preview':   // ver las siguientes 5 piezas durante 30 s
+      previewTimer = PREVIEW_MS;
+      drawNext();
+      popup('VISIÓN x5', '#b388ff');
+      break;
+    case 'swap': {    // cambia la pieza actual por otra distinta del pool estándar
+      const options = STANDARD_PIECES.filter(t => t !== current.type);
+      const piece = makePiece(options[Math.floor(Math.random() * options.length)]);
+      if (!collide(piece.shape, current.x, current.y)) { piece.x = current.x; piece.y = current.y; }
+      else if (collide(piece.shape, piece.x, piece.y)) return;  // no cabe: no gasta energía
+      current = piece;
+      lastMoveRotate = false;
+      popup('INTERCAMBIO', '#b388ff');
+      break;
+    }
+    case 'slow':      // caída más lenta durante 10 s
+      slowTimer = SLOW_MS;
+      popup('TIEMPO LENTO', '#b388ff');
+      break;
+    case 'undo': {    // deshace la última colocación
+      const s = undoSnapshot;
+      board = s.board;
+      queue = s.queue;
+      hold = s.hold;
+      ({ score, lines, level, combo, backToBack, nextPowerAt, dropInterval } = s);
+      current = s.piece;
+      canHold = true;
+      spawnSnapshot = takeSnapshot();
+      undoSnapshot = null;
+      drawNext();
+      drawHold();
+      popup('DESHACER', '#b388ff');
+      break;
+    }
+    case 'hold':      // reserva aunque el hold ya se haya usado en esta pieza
+      holdPiece(true);
+      popup('RESERVA', '#b388ff');
+      break;
+  }
+  energy = 0;
+  sfx.power();
+  updateHUD();
+}
+
 function updateHUD() {
   scoreEl.textContent = score.toLocaleString();
   linesEl.textContent = lines;
   levelEl.textContent = level;
   comboEl.textContent = combo >= 2 ? `x${combo}` : '—';
   b2bEl.classList.toggle('hidden', !backToBack);
+  energyFill.style.width = `${(energy / ENERGY_MAX) * 100}%`;
+  energyFill.parentElement.classList.toggle('full', energy >= ENERGY_MAX);
+  energyHint.textContent = energy >= ENERGY_MAX ? 'Pulsa E' : `${energy}%`;
 }
 
 // ── Efectos visuales y sonoros ───────────────────────────────────────────────
@@ -529,17 +636,26 @@ function draw() {
       if (current.power) drawPowerMark(ctx, current.x + c, current.y + r, BLOCK, current.power);
     }
 
-  // congelado: tinte azul + cuenta regresiva
+  // congelado: tinte azul
   if (freezeTimer > 0) {
     ctx.fillStyle = 'rgba(128,216,255,0.08)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.fillStyle = POWERS.freeze.color;
-    ctx.font = "700 14px 'Courier New', monospace";
-    ctx.textAlign = 'center';
-    ctx.fillText(`CONGELADO ${(freezeTimer / 1000).toFixed(1)}s`, canvas.width / 2, 18);
-    ctx.restore();
   }
+
+  // efectos temporales activos, con cuenta regresiva
+  const statuses = [
+    [freezeTimer, 'CONGELADO', POWERS.freeze.color],
+    [slowTimer, 'LENTO', '#b388ff'],
+    [previewTimer, 'VISIÓN x5', '#b388ff'],
+  ].filter(([t]) => t > 0);
+  ctx.save();
+  ctx.font = "700 14px 'Courier New', monospace";
+  ctx.textAlign = 'center';
+  statuses.forEach(([t, label, color], i) => {
+    ctx.fillStyle = color;
+    ctx.fillText(`${label} ${(t / 1000).toFixed(1)}s`, canvas.width / 2, 18 + i * 18);
+  });
+  ctx.restore();
 
   drawEffects();
 }
@@ -563,9 +679,16 @@ function drawPiecePreview(context, piece, size, boxY, boxH) {
   context.restore();
 }
 
+// NEXT: normalmente 1 pieza; con la habilidad de visión, 5 (las 4 extra en pequeño)
 function drawNext() {
+  const visible = previewTimer > 0 ? QUEUE_SIZE : 1;
+  const height = 120 + (visible - 1) * 60;
+  if (nextCanvas.height !== height) nextCanvas.height = height;
   nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
-  drawPiecePreview(nextCtx, next, 30, 0, nextCanvas.height);
+  drawPiecePreview(nextCtx, queue[0], 30, 0, 120);
+  for (let i = 1; i < visible; i++) drawPiecePreview(nextCtx, queue[i], 15, 120 + (i - 1) * 60, 60);
+
+  const next = queue[0];
   nextPowerEl.classList.toggle('hidden', !next.power);
   if (next.power) {
     nextPowerEl.textContent = POWERS[next.power].name;
@@ -600,11 +723,17 @@ function togglePause() {
 }
 
 function update(dt) {
+  if (previewTimer > 0) {
+    previewTimer = Math.max(0, previewTimer - dt);
+    if (previewTimer === 0) drawNext();
+  }
+  if (slowTimer > 0) slowTimer = Math.max(0, slowTimer - dt);
+
   if (freezeTimer > 0) {
     freezeTimer = Math.max(0, freezeTimer - dt);   // congelado: no hay caída
   } else {
     dropAccum += dt;
-    if (dropAccum >= dropInterval) {
+    if (dropAccum >= dropInterval * (slowTimer > 0 ? SLOW_FACTOR : 1)) {
       dropAccum = 0;
       if (!tryMove(0, 1)) lockPiece();
     }
@@ -636,12 +765,17 @@ function init() {
   backToBack = false;
   nextPowerAt = POWER_EVERY_LINES;
   freezeTimer = 0;
+  energy = 0;
+  previewTimer = 0;
+  slowTimer = 0;
+  undoSnapshot = null;
   popups = [];
   flashAlpha = 0;
-  next = randomPiece();
+  queue = Array.from({ length: QUEUE_SIZE }, randomPiece);
   spawn();
   updateHUD();
   overlay.classList.add('hidden');
+  abilityMenu.classList.add('hidden');
   cancelAnimationFrame(animId);
   animId = requestAnimationFrame(loop);
 }
@@ -650,8 +784,17 @@ document.addEventListener('keydown', e => {
   sfx.unlock();
   if (e.code === 'KeyP') { togglePause(); return; }
   if (e.code === 'KeyM') { sfx.toggleMute(); return; }
+  if (state === 'ability') {
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= ABILITIES.length) useAbility(ABILITIES[n - 1]);
+    else if (e.code === 'Escape' || e.code === 'KeyE') closeAbilityMenu();
+    return;
+  }
   if (state !== 'playing') return;
   switch (e.code) {
+    case 'KeyE':
+      openAbilityMenu();
+      break;
     case 'ArrowLeft':
       tryMove(-1, 0);
       break;
@@ -679,6 +822,7 @@ document.addEventListener('keydown', e => {
 });
 
 restartBtn.addEventListener('click', init);
+abilityButtons.forEach(btn => btn.addEventListener('click', () => useAbility(btn.dataset.ability)));
 
 const themeToggle = document.getElementById('theme-toggle');
 const toggleIcon = themeToggle.querySelector('.toggle-icon');

@@ -178,6 +178,76 @@ body {
   display: none;
 }
 
+.hint {
+  font-size: 11px;
+  color: var(--controls-text);
+}
+
+/* ---- Barra de energía ---- */
+.energy-bar {
+  height: 12px;
+  border: 1px solid var(--border);
+  background: var(--canvas-bg);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+#energy-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #7c4dff, #b388ff);
+  transition: width 0.3s;
+}
+
+.energy-bar.full {
+  box-shadow: 0 0 10px #b388ff;
+  animation: pulse 1s infinite alternate;
+}
+
+@keyframes pulse {
+  to { box-shadow: 0 0 18px #b388ff; }
+}
+
+/* ---- Menús (habilidades, modos) ---- */
+.overlay-heading {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: #b388ff;
+}
+
+.menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 280px;
+}
+
+.menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.menu-btn:hover:not(:disabled) {
+  border-color: #b388ff;
+  color: #b388ff;
+}
+
+.menu-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Hold ya usado en esta pieza */
 #hold-canvas.locked {
   opacity: 0.35;
