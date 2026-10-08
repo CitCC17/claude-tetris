@@ -42,7 +42,8 @@ const overlayTitle = document.getElementById('overlay-title');
 const overlayScore = document.getElementById('overlay-score');
 const restartBtn = document.getElementById('restart-btn');
 
-let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
+let board, current, next, score, lines, level, lastTime, dropAccum, dropInterval, animId;
+let state; // 'playing' | 'paused' | 'over'
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => new Array(COLS).fill(0));
@@ -221,30 +222,25 @@ function drawNext() {
 }
 
 function endGame() {
-  gameOver = true;
-  cancelAnimationFrame(animId);
+  state = 'over';
   overlayTitle.textContent = 'GAME OVER';
   overlayScore.textContent = `Puntuación: ${score.toLocaleString()}`;
   overlay.classList.remove('hidden');
 }
 
 function togglePause() {
-  if (gameOver) return;
-  paused = !paused;
-  if (!paused) {
-    lastTime = performance.now();
-    loop(lastTime);
-  } else {
-    cancelAnimationFrame(animId);
+  if (state === 'playing') {
+    state = 'paused';
     overlayTitle.textContent = 'PAUSA';
     overlayScore.textContent = '';
     overlay.classList.remove('hidden');
+  } else if (state === 'paused') {
+    state = 'playing';
+    overlay.classList.add('hidden');
   }
 }
 
-function loop(ts) {
-  const dt = ts - lastTime;
-  lastTime = ts;
+function update(dt) {
   dropAccum += dt;
   if (dropAccum >= dropInterval) {
     dropAccum = 0;
@@ -254,9 +250,16 @@ function loop(ts) {
       lockPiece();
     }
   }
-  if (gameOver) return;
+}
+
+// El loop sigue corriendo en pausa/menús (solo se congela la lógica) y se
+// detiene al terminar la partida.
+function loop(ts) {
+  const dt = Math.min(ts - lastTime, 100);
+  lastTime = ts;
+  if (state === 'playing') update(dt);
   draw();
-  animId = requestAnimationFrame(loop);
+  if (state !== 'over') animId = requestAnimationFrame(loop);
 }
 
 function init() {
@@ -264,8 +267,7 @@ function init() {
   score = 0;
   lines = 0;
   level = 1;
-  paused = false;
-  gameOver = false;
+  state = 'playing';
   dropInterval = 1000;
   dropAccum = 0;
   lastTime = performance.now();
@@ -279,7 +281,7 @@ function init() {
 
 document.addEventListener('keydown', e => {
   if (e.code === 'KeyP') { togglePause(); return; }
-  if (paused || gameOver) return;
+  if (state !== 'playing') return;
   switch (e.code) {
     case 'ArrowLeft':
       if (!collide(current.shape, current.x - 1, current.y)) current.x--;
