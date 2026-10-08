@@ -248,6 +248,48 @@ body {
   cursor: not-allowed;
 }
 
+.menu-btn span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-btn small {
+  font-size: 11px;
+  color: var(--controls-text);
+}
+
+/* ---- Objetivo del desafío ---- */
+.panel-section.hidden {
+  display: none;
+}
+
+.objective {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ffd54f;
+}
+
+#overlay-title.won {
+  color: #81c784;
+}
+
+#menu-btn {
+  background: transparent;
+  color: #7aa2f7;
+  border: 1px solid #7aa2f7;
+  border-radius: 6px;
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+
+#menu-btn:hover {
+  background: rgba(122, 162, 247, 0.12);
+}
+
 /* Hold ya usado en esta pieza */
 #hold-canvas.locked {
   opacity: 0.35;

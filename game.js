@@ -19,9 +19,13 @@ const COLORS = [
   '#aed581', // Y - pentominó (lima)
   '#fafafa', // single 1×1 (blanco)
   '#ffffff', // comodín (se dibuja con arcoíris animado)
+  '#5c5c6e', // basura (modo desafío)
+  '#8d6e63', // bloque fijo pre-colocado (modo desafío)
 ];
 
 const WILD = 13;
+const GARBAGE = 14;
+const FIXED = 15;
 
 const PIECES = [
   null,
@@ -74,6 +78,17 @@ const SLOW_MS = 10000;
 const SLOW_FACTOR = 2.5;
 const ABILITIES = ['preview', 'swap', 'slow', 'undo', 'hold'];
 
+// Modos: clásico (sin objetivo) y desafíos con un objetivo concreto
+const MODES = {
+  classic:   { name: 'Clásico' },
+  sprint:    { name: 'Sprint 40', goalLines: 40, timeLimit: 120000 },
+  garbage:   { name: 'Basura', survive: 120000, garbageEvery: 10000 },
+  fixed:     { name: 'Bloques fijos', fixedRows: 6 },
+  invisible: { name: 'Invisible', goalLines: 20, invisible: true },
+  reverse:   { name: 'Rotación inversa', goalLines: 20, startLevel: 4, reverseFromLevel: 5 },
+};
+const MODE_KEYS = Object.keys(MODES);
+
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const nextCanvas = document.getElementById('next-canvas');
@@ -94,9 +109,15 @@ const overlay = document.getElementById('overlay');
 const overlayTitle = document.getElementById('overlay-title');
 const overlayScore = document.getElementById('overlay-score');
 const restartBtn = document.getElementById('restart-btn');
+const menuBtn = document.getElementById('menu-btn');
+const modeMenu = document.getElementById('mode-menu');
+const modeButtons = modeMenu.querySelectorAll('[data-mode]');
+const objectiveSection = document.getElementById('objective-section');
+const objectiveEl = document.getElementById('objective');
 
 let board, current, queue, score, lines, level, lastTime, dropAccum, dropInterval, animId;
-let state; // 'playing' | 'paused' | 'over'
+let state; // 'menu' | 'playing' | 'paused' | 'ability' | 'over' | 'won'
+let modeKey, mode, elapsed, garbageTimer;
 let hold, canHold;
 let combo, backToBack, lastMoveRotate;
 let nextPowerAt, freezeTimer;
@@ -147,8 +168,12 @@ function rotateCW(shape) {
   return result;
 }
 
+const rotateCCW = shape => rotateCW(rotateCW(rotateCW(shape)));
+
+const isReversed = () => !!mode.reverseFromLevel && level >= mode.reverseFromLevel;
+
 function tryRotate() {
-  const rotated = rotateCW(current.shape);
+  const rotated = isReversed() ? rotateCCW(current.shape) : rotateCW(current.shape);
   const kicks = [0, -1, 1, -2, 2];
   for (const kick of kicks) {
     if (!collide(rotated, current.x + kick, current.y)) {
@@ -253,8 +278,14 @@ function applyPower(piece) {
 function addLines(cleared) {
   if (!cleared) return;
   lines += cleared;
-  level = Math.floor(lines / 10) + 1;
-  dropInterval = Math.max(100, 1000 - (level - 1) * 90);
+  const wasReversed = isReversed();
+  level = (mode.startLevel || 1) + Math.floor(lines / 10);
+  dropInterval = speedFor(level);
+  if (!wasReversed && isReversed()) popup('¡ROTACIÓN INVERSA!', '#ff8a65', 24);
+}
+
+function speedFor(lvl) {
+  return Math.max(100, 1000 - (lvl - 1) * 90);
 }
 
 function lineScore(cleared) {
@@ -333,6 +364,11 @@ function softDrop() {
 }
 
 function lockPiece() {
+  // La basura puede empujar la pieza por encima del tablero: si se fija ahí, se pierde
+  if (current.shape.some((row, r) => row.some(v => v && current.y + r < 0))) {
+    endGame();
+    return;
+  }
   undoSnapshot = spawnSnapshot;
   const tspin = isTSpin();
   merge();
@@ -561,6 +597,7 @@ const sfx = (() => {
     perfect: () => arpeggio([523, 659, 784, 1047, 1319, 1568], 0.08, 'triangle'),
     power: () => arpeggio([220, 330, 440], 0.05, 'sawtooth'),
     gameOver: () => arpeggio([392, 330, 262, 196], 0.15, 'triangle'),
+    garbage: () => tone(110, 0.2, 'sawtooth'),
   };
 })();
 
@@ -575,6 +612,11 @@ function drawBlock(context, x, y, colorIndex, size, alpha) {
   // highlight
   context.fillStyle = 'rgba(255,255,255,0.12)';
   context.fillRect(x * size + 1, y * size + 1, size - 2, 4);
+  // bloque fijo: remache central para distinguirlo
+  if (colorIndex === FIXED) {
+    context.fillStyle = 'rgba(0,0,0,0.35)';
+    context.fillRect(x * size + size / 2 - 3, y * size + size / 2 - 3, 6, 6);
+  }
   context.globalAlpha = 1;
 }
 
@@ -616,10 +658,11 @@ function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawGrid();
 
-  // board
+  // board (en modo invisible solo se revela al terminar la partida)
+  const hideBoard = mode.invisible && state !== 'over' && state !== 'won';
   for (let r = 0; r < ROWS; r++)
     for (let c = 0; c < COLS; c++)
-      drawBlock(ctx, c, r, board[r][c], BLOCK);
+      if (!hideBoard) drawBlock(ctx, c, r, board[r][c], BLOCK);
 
   // ghost
   const gy = ghostY();
@@ -702,12 +745,86 @@ function drawHold() {
   holdCanvas.classList.toggle('locked', !canHold);
 }
 
-function endGame() {
+function endGame(title = 'GAME OVER') {
   state = 'over';
-  overlayTitle.textContent = 'GAME OVER';
+  overlayTitle.textContent = title;
+  overlayTitle.classList.remove('won');
   overlayScore.textContent = `Puntuación: ${score.toLocaleString()}`;
   overlay.classList.remove('hidden');
   sfx.gameOver();
+}
+
+function winGame() {
+  state = 'won';
+  overlayTitle.textContent = '¡OBJETIVO CUMPLIDO!';
+  overlayTitle.classList.add('won');
+  overlayScore.textContent = `${mode.name} · ${formatTime(elapsed)} · ${score.toLocaleString()} pts`;
+  overlay.classList.remove('hidden');
+  sfx.perfect();
+}
+
+// ── Modo desafío ─────────────────────────────────────────────────────────────
+function formatTime(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// Bloques fijos en las filas de abajo, siempre con al menos 2 huecos por fila
+function placeFixedBlocks(rows) {
+  for (let r = ROWS - rows; r < ROWS; r++) {
+    const filled = 4 + Math.floor(Math.random() * 4);   // 4–7 de 10
+    const cols = [...Array(COLS).keys()].sort(() => Math.random() - 0.5).slice(0, filled);
+    for (const c of cols) board[r][c] = FIXED;
+  }
+}
+
+// Sube una fila de basura (con un hueco) desde abajo
+function addGarbageRow() {
+  if (board[0].some(v => v)) { endGame(); return; }
+  const row = new Array(COLS).fill(GARBAGE);
+  row[Math.floor(Math.random() * COLS)] = 0;
+  board.shift();
+  board.push(row);
+  if (collide(current.shape, current.x, current.y)) current.y--;
+  if (collide(current.shape, current.x, current.y)) { endGame(); return; }
+  flash('rgba(92,92,110,', 0.3);
+  sfx.garbage();
+}
+
+const countCells = value => board.reduce((n, row) => n + row.filter(v => v === value).length, 0);
+
+function updateChallenge(dt) {
+  elapsed += dt;
+  if (mode.garbageEvery) {
+    garbageTimer += dt;
+    if (garbageTimer >= mode.garbageEvery) {
+      garbageTimer = 0;
+      addGarbageRow();
+      if (state !== 'playing') return;
+    }
+  }
+  if (mode.goalLines && lines >= mode.goalLines) return winGame();
+  if (mode.survive && elapsed >= mode.survive) return winGame();
+  if (mode.fixedRows && countCells(FIXED) === 0) return winGame();
+  if (mode.timeLimit && elapsed >= mode.timeLimit) return endGame('¡TIEMPO!');
+}
+
+function objectiveText() {
+  switch (modeKey) {
+    case 'sprint':    return `Líneas ${lines}/${mode.goalLines} · quedan ${formatTime(mode.timeLimit - elapsed)}`;
+    case 'garbage':   return `Sobrevive ${formatTime(mode.survive - elapsed)} · basura en ${formatTime(mode.garbageEvery - garbageTimer)}`;
+    case 'fixed':     return `Elimina los bloques fijos · quedan ${countCells(FIXED)}`;
+    case 'invisible': return `Líneas ${lines}/${mode.goalLines} · piezas invisibles al caer`;
+    case 'reverse':   return `Líneas ${lines}/${mode.goalLines} · rotación ${isReversed() ? 'INVERSA' : `normal hasta nivel ${mode.reverseFromLevel}`}`;
+    default:          return '';
+  }
+}
+
+function showModeMenu() {
+  state = 'menu';
+  overlay.classList.add('hidden');
+  abilityMenu.classList.add('hidden');
+  modeMenu.classList.remove('hidden');
 }
 
 function togglePause() {
@@ -739,6 +856,8 @@ function update(dt) {
     }
   }
   updateEffects(dt);
+  if (state === 'playing') updateChallenge(dt);
+  objectiveEl.textContent = objectiveText();
 }
 
 // El loop sigue corriendo en pausa/menús (solo se congela la lógica) y se
@@ -748,17 +867,22 @@ function loop(ts) {
   lastTime = ts;
   if (state === 'playing') update(dt);
   draw();
-  if (state !== 'over') animId = requestAnimationFrame(loop);
+  if (state !== 'over' && state !== 'won') animId = requestAnimationFrame(loop);
 }
 
-function init() {
+function init(key = modeKey) {
+  modeKey = key;
+  mode = MODES[key];
   board = createBoard();
+  if (mode.fixedRows) placeFixedBlocks(mode.fixedRows);
   score = 0;
   lines = 0;
-  level = 1;
+  level = mode.startLevel || 1;
   state = 'playing';
-  dropInterval = 1000;
+  dropInterval = speedFor(level);
   dropAccum = 0;
+  elapsed = 0;
+  garbageTimer = 0;
   lastTime = performance.now();
   hold = null;
   combo = 0;
@@ -776,6 +900,9 @@ function init() {
   updateHUD();
   overlay.classList.add('hidden');
   abilityMenu.classList.add('hidden');
+  modeMenu.classList.add('hidden');
+  objectiveSection.classList.toggle('hidden', key === 'classic');
+  objectiveEl.textContent = objectiveText();
   cancelAnimationFrame(animId);
   animId = requestAnimationFrame(loop);
 }
@@ -784,6 +911,11 @@ document.addEventListener('keydown', e => {
   sfx.unlock();
   if (e.code === 'KeyP') { togglePause(); return; }
   if (e.code === 'KeyM') { sfx.toggleMute(); return; }
+  if (state === 'menu') {
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= MODE_KEYS.length) init(MODE_KEYS[n - 1]);
+    return;
+  }
   if (state === 'ability') {
     const n = parseInt(e.key, 10);
     if (n >= 1 && n <= ABILITIES.length) useAbility(ABILITIES[n - 1]);
@@ -821,8 +953,11 @@ document.addEventListener('keydown', e => {
   updateHUD();
 });
 
-restartBtn.addEventListener('click', init);
-abilityButtons.forEach(btn => btn.addEventListener('click', () => useAbility(btn.dataset.ability)));
+// blur(): que Espacio (hard drop) no vuelva a "pulsar" el botón enfocado
+restartBtn.addEventListener('click', () => { restartBtn.blur(); init(); });
+menuBtn.addEventListener('click', () => { menuBtn.blur(); showModeMenu(); });
+abilityButtons.forEach(btn => btn.addEventListener('click', () => { btn.blur(); useAbility(btn.dataset.ability); }));
+modeButtons.forEach(btn => btn.addEventListener('click', () => { btn.blur(); init(btn.dataset.mode); }));
 
 const themeToggle = document.getElementById('theme-toggle');
 const toggleIcon = themeToggle.querySelector('.toggle-icon');
@@ -849,4 +984,5 @@ themeToggle.addEventListener('click', () => {
   localStorage.setItem('tetris-theme', isLight ? 'light' : 'dark');
 });
 
-init();
+init('classic');
+showModeMenu();

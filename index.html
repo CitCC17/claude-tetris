@@ -47,6 +47,11 @@
           <span class="value" id="level">1</span>
         </div>
 
+        <div class="panel-section hidden" id="objective-section">
+          <span class="label">OBJETIVO</span>
+          <span class="objective" id="objective"></span>
+        </div>
+
         <div class="panel-section">
           <span class="label">NEXT</span>
           <canvas id="next-canvas" width="120" height="120"></canvas>
@@ -74,6 +79,21 @@
         <p id="overlay-title">GAME OVER</p>
         <p id="overlay-score"></p>
         <button id="restart-btn">Reiniciar</button>
+        <button id="menu-btn">Cambiar modo</button>
+      </div>
+    </div>
+
+    <div id="mode-menu" class="overlay hidden">
+      <div class="overlay-box">
+        <p class="overlay-heading">ELIGE MODO</p>
+        <div class="menu-list">
+          <button class="menu-btn" data-mode="classic"><kbd>1</kbd><span><b>Clásico</b><small>Sin objetivo: aguanta todo lo que puedas</small></span></button>
+          <button class="menu-btn" data-mode="sprint"><kbd>2</kbd><span><b>Sprint 40</b><small>Limpia 40 líneas en 2 minutos</small></span></button>
+          <button class="menu-btn" data-mode="garbage"><kbd>3</kbd><span><b>Basura</b><small>Sobrevive 2 min con basura subiendo cada 10 s</small></span></button>
+          <button class="menu-btn" data-mode="fixed"><kbd>4</kbd><span><b>Bloques fijos</b><small>Elimina todos los bloques pre-colocados</small></span></button>
+          <button class="menu-btn" data-mode="invisible"><kbd>5</kbd><span><b>Invisible</b><small>Las piezas desaparecen al tocar suelo · 20 líneas</small></span></button>
+          <button class="menu-btn" data-mode="reverse"><kbd>6</kbd><span><b>Rotación inversa</b><small>Desde el nivel 5 la rotación se invierte · 20 líneas</small></span></button>
+        </div>
       </div>
     </div>
 
